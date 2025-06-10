@@ -6,6 +6,26 @@ import sys
 URL = "https://selfservice.broxtowe.gov.uk/renderform.aspx?t=217&k=9D2EF214E144EE796430597FB475C3892C43C528"
 ASPX_KEYS = ["__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION"]
 
+class ScraperError(Exception):
+    """Base class for scraper errors"""
+    pass
+
+class ClientError(ScraperError):
+    """Raised when the inputs are invalid"""
+    pass
+
+class UpstreamError(ScraperError):
+    """Raised when the response back from Broxtowe is invalid"""
+    pass
+
+class ServiceUnavailableError(ScraperError):
+    """Raised when the service is unavailable"""
+    pass
+
+class InvalidResponseError(ScraperError):
+    """Raised when the response is invalid"""
+    pass
+
 def get_headers(delta=True):
     return {
         "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0 BroxtoweBinCollectionScraper/1.0 (+https://github.com/timtjtim/BroxtoweBinCollectionScraper;)",
@@ -18,7 +38,7 @@ def parse_bin_data(html_content):
     table = soup.find('table', {'class': 'bartec'})
 
     if not table:
-        return None
+        raise UpstreamError("No bin collection data found")
 
     bins = []
     rows = table.find_all('tr')[1:]  # Skip header row
@@ -40,6 +60,9 @@ def parse_bin_data(html_content):
                 'next_collection_iso': next_collection_iso,
             }
             bins.append(bin_data)
+
+    if not bins:
+        raise UpstreamError("No bin collection data found")
 
     return bins
 
@@ -63,6 +86,29 @@ def format_uprn(uprn):
 def extract_uprn(not_uprn):
     return not_uprn.lstrip("U")
 
+def validate_response(response: requests.Response):
+    """Validate the HTTP response and raise appropriate exceptions"""
+    if response.status_code == 503:
+        raise ServiceUnavailableError("Broxtowe Borough Council website is currently unavailable")
+
+    if response.status_code == 404:
+        raise InvalidResponseError(
+            "Broxtowe Borough Council requested page was not found"
+        )
+
+    if response.status_code >= 500:
+        raise ServiceUnavailableError(
+            f"Server error: {response.status_code}, {response.text}"
+        )
+
+    if response.status_code >= 400:
+        raise InvalidResponseError(
+            f"Client error: {response.status_code}, {response.text}"
+        )
+
+    if not response.ok:
+        raise InvalidResponseError(f"Unexpected response: {response.status_code}, {response.text}")
+
 def get_bin_data(postcode, uprn):
     postcode = postcode.upper().replace(" ", "")
 
@@ -71,6 +117,7 @@ def get_bin_data(postcode, uprn):
 
     # Initial GET request
     response = session.get(URL, headers=get_headers())
+    validate_response(response)
 
     # Parse the response to get form data
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -93,6 +140,7 @@ def get_bin_data(postcode, uprn):
 
     # Make the AJAX request
     response = session.post(URL, headers=get_headers(), data=data)
+    validate_response(response)
 
     aspx_fields = extract_aspx_fields(
         response.text, ["ctl00_ContentPlaceHolder1_APUP_5683"]
@@ -103,7 +151,7 @@ def get_bin_data(postcode, uprn):
     address_select = soup.find('select', {'name': 'ctl00$ContentPlaceHolder1$FF5683DDL'})
 
     if not address_select:
-        return None
+        raise ClientError('No addresses for the postcode')
 
     addresses = []
     for option in address_select.find_all('option'):
@@ -114,11 +162,12 @@ def get_bin_data(postcode, uprn):
             })
 
     if not addresses:
-        return None
+        raise ClientError("No addresses for the postcode")
 
-    matched_address = next(address for address in addresses if address["uprn"] == uprn)
-    if not matched_address:
-        return None
+    try:
+        matched_address = next(address for address in addresses if address["uprn"] == uprn)
+    except StopIteration as e:
+        raise ClientError("No address for the postcode and UPRN")
 
     # Make request with the UPRN
     data = {
@@ -134,6 +183,7 @@ def get_bin_data(postcode, uprn):
     data.update(aspx_fields)
 
     response = session.post(URL, headers=get_headers(), data=data)
+    validate_response(response)
 
     aspx_fields = extract_aspx_fields(
         response.text, ["ctl00_ContentPlaceHolder1_APUP_5683"]
@@ -153,6 +203,7 @@ def get_bin_data(postcode, uprn):
         headers=get_headers(False),
         data=data,
     )
+    validate_response(response)
 
     # Parse the bin collection data
     bin_data = parse_bin_data(response.text)

@@ -1,7 +1,10 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
-from scrape import get_bin_data
+import scrape
+import logging
+
+logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(
     title="Broxtowe Bin Collection API",
@@ -22,16 +25,22 @@ class BinResponse(BaseModel):
     bin_collections: Optional[List[BinData]]
     address: Address
 
-class BinRequest(BaseModel):
-    postcode: str
-    uprn: str
-
-@app.post("/bins", response_model=BinResponse)
-async def get_bins(request: BinRequest):
+@app.get("/bins", response_model=BinResponse)
+async def get_bins(postcode: str, uprn: str):
     try:
-        result = get_bin_data(request.postcode, request.uprn)
-        if result is None:
-            raise HTTPException(status_code=404, detail="No bin data found for the provided postcode and UPRN")
-        return result
+        return scrape.get_bin_data(postcode, uprn)
+    except scrape.ClientError as e:
+        logging.exception(e)
+        raise HTTPException(status_code=400, detail=str(e))
+    except scrape.UpstreamError as e:
+        logging.exception(e)
+        raise HTTPException(status_code=503, detail=str(e))
+    except scrape.ServiceUnavailableError as e:
+        logging.exception(e)
+        raise HTTPException(status_code=503, detail=str(e))
+    except scrape.InvalidResponseError as e:
+        logging.exception(e)
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
+        logging.exception(e)
         raise HTTPException(status_code=500, detail=str(e))
