@@ -6,6 +6,18 @@ import sys
 URL = "https://selfservice.broxtowe.gov.uk/renderform.aspx?t=217&k=9D2EF214E144EE796430597FB475C3892C43C528"
 ASPX_KEYS = ["__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION"]
 
+BASE_ID = "ctl00_ContentPlaceHolder1_"
+BASE_NAME = BASE_ID.replace("_", "$")
+
+FORM_CODE = "APUP_5683"
+FORM_ID = f"{BASE_ID}{FORM_CODE}"
+FORM_NAME = f"{BASE_NAME}{FORM_CODE}"
+
+POSTCODE_NAME = f"{BASE_NAME}FF5683TB"
+SEARCH_NAME = f"{BASE_NAME}FF5683BTN"
+ADDRESS_NAME = f"{BASE_NAME}FF5683DDL"
+NEXT_BUTTON_NAME = f"{BASE_NAME}btnSubmit"
+
 class ScraperError(Exception):
     """Base class for scraper errors"""
     pass
@@ -123,17 +135,13 @@ def get_bin_data(postcode, uprn):
     soup = BeautifulSoup(response.text, 'html.parser')
 
     # Extract form fields
-
     aspx_fields = {key: soup.find("input", {"name": key})["value"] for key in ASPX_KEYS}
 
     # Prepare data for the AJAX request
     data = {
-        "ctl00$ScriptManager1": "ctl00$ContentPlaceHolder1$APUP_5683|ctl00$ContentPlaceHolder1$FF5683BTN",
-        "__EVENTTARGET": "ctl00$ContentPlaceHolder1$FF5683BTN",
-        "__EVENTARGUMENT": "",
-        "ctl00$ContentPlaceHolder1$txtPositionLL": "",
-        "ctl00$ContentPlaceHolder1$txtPosition": "",
-        "ctl00$ContentPlaceHolder1$FF5683TB": postcode,
+        "ctl00$ScriptManager1": f"{FORM_NAME}|{SEARCH_NAME}",
+        "__EVENTTARGET": SEARCH_NAME,
+        POSTCODE_NAME: postcode,
         "__ASYNCPOST": "true",
     }
     data.update(aspx_fields)
@@ -143,12 +151,12 @@ def get_bin_data(postcode, uprn):
     validate_response(response)
 
     aspx_fields = extract_aspx_fields(
-        response.text, ["ctl00_ContentPlaceHolder1_APUP_5683"]
+        response.text, [FORM_ID]
     )
     soup = BeautifulSoup(
-        aspx_fields["ctl00_ContentPlaceHolder1_APUP_5683"], "html.parser"
+        aspx_fields[FORM_ID], "html.parser"
     )
-    address_select = soup.find('select', {'name': 'ctl00$ContentPlaceHolder1$FF5683DDL'})
+    address_select = soup.find("select", {"name": ADDRESS_NAME})
 
     if not address_select:
         raise ClientError('No addresses for the postcode')
@@ -171,13 +179,9 @@ def get_bin_data(postcode, uprn):
 
     # Make request with the UPRN
     data = {
-        "ctl00$ScriptManager1": "ctl00$ContentPlaceHolder1$APUP_5683|ctl00$ContentPlaceHolder1$FF5683DDL",
-        "ctl00$ContentPlaceHolder1$txtPositionLL": "",
-        "ctl00$ContentPlaceHolder1$txtPosition": "",
-        "ctl00$ContentPlaceHolder1$FF5683DDL": format_uprn(matched_address["uprn"]),
-        "__EVENTTARGET": "ctl00$ContentPlaceHolder1$FF5683DDL",
-        "__EVENTARGUMENT": "",
-        "__LASTFOCUS": "",
+        "ctl00$ScriptManager1": f"{FORM_NAME}|{ADDRESS_NAME}",
+        ADDRESS_NAME: format_uprn(matched_address["uprn"]),
+        "__EVENTTARGET": ADDRESS_NAME,
         "__ASYNCPOST": "true",
     }
     data.update(aspx_fields)
@@ -186,15 +190,11 @@ def get_bin_data(postcode, uprn):
     validate_response(response)
 
     aspx_fields = extract_aspx_fields(
-        response.text, ["ctl00_ContentPlaceHolder1_APUP_5683"]
+        response.text, [FORM_ID]
     )
 
     data = {
-        "ctl00$ContentPlaceHolder1$txtPositionLL": "",
-        "ctl00$ContentPlaceHolder1$txtPosition": "",
-        "__EVENTTARGET": "ctl00$ContentPlaceHolder1$btnSubmit",
-        "__EVENTARGUMENT": "",
-        "__LASTFOCUS": "",
+        "__EVENTTARGET": NEXT_BUTTON_NAME,
     }
     data.update(aspx_fields)
 
