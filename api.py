@@ -26,10 +26,6 @@ class BinRequest(BaseModel):
     postcode: str
     uprn: str
 
-@app.get("/")
-async def root():
-    return {"message": "Welcome to the Broxtowe Bin Collection API"}
-
 @app.post("/bins", response_model=BinResponse)
 async def get_bins(request: BinRequest):
     try:
