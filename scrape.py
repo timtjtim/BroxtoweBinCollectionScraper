@@ -1,6 +1,5 @@
 import requests
 from bs4 import BeautifulSoup
-import re
 from datetime import datetime
 import sys
 
@@ -58,7 +57,15 @@ def extract_aspx_fields(response_text, keys):
 
     return extracted
 
+def format_uprn(uprn):
+    return f"U{uprn}"
+
+def extract_uprn(not_uprn):
+    return not_uprn.lstrip("U")
+
 def get_bin_data(postcode, uprn):
+    postcode = postcode.upper().replace(" ", "")
+
     # Initial session to get the form
     session = requests.Session()
 
@@ -79,7 +86,7 @@ def get_bin_data(postcode, uprn):
         "__EVENTARGUMENT": "",
         "ctl00$ContentPlaceHolder1$txtPositionLL": "",
         "ctl00$ContentPlaceHolder1$txtPosition": "",
-        "ctl00$ContentPlaceHolder1$FF5683TB": postcode.lower().replace(" ", ""),
+        "ctl00$ContentPlaceHolder1$FF5683TB": postcode,
         "__ASYNCPOST": "true",
     }
     data.update(aspx_fields)
@@ -102,11 +109,15 @@ def get_bin_data(postcode, uprn):
     for option in address_select.find_all('option'):
         if option.get('value') and option.get('value') != '0':  # Skip the "Enter a different post code" option
             addresses.append({
-                'uprn': option.get('value'),
+                'uprn': extract_uprn(option.get('value')),
                 'address': option.text
             })
 
     if not addresses:
+        return None
+
+    matched_address = next(address for address in addresses if address["uprn"] == uprn)
+    if not matched_address:
         return None
 
     # Make request with the UPRN
@@ -114,7 +125,7 @@ def get_bin_data(postcode, uprn):
         "ctl00$ScriptManager1": "ctl00$ContentPlaceHolder1$APUP_5683|ctl00$ContentPlaceHolder1$FF5683DDL",
         "ctl00$ContentPlaceHolder1$txtPositionLL": "",
         "ctl00$ContentPlaceHolder1$txtPosition": "",
-        "ctl00$ContentPlaceHolder1$FF5683DDL": uprn,
+        "ctl00$ContentPlaceHolder1$FF5683DDL": format_uprn(matched_address["uprn"]),
         "__EVENTTARGET": "ctl00$ContentPlaceHolder1$FF5683DDL",
         "__EVENTARGUMENT": "",
         "__LASTFOCUS": "",
@@ -147,11 +158,11 @@ def get_bin_data(postcode, uprn):
     bin_data = parse_bin_data(response.text)
 
     return {
-        'bin_collections': bin_data
+        'bin_collections': bin_data,
+        'address': matched_address,
     }
 
 if __name__ == "__main__":
-    # Example usage
     if len(sys.argv) != 3:
         print("Usage: python bins.py <postcode> <uprn>")
         sys.exit(1)
