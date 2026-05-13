@@ -123,6 +123,7 @@ def validate_response(response: requests.Response):
 
 def get_bin_data(postcode, uprn):
     postcode = postcode.upper().replace(" ", "")
+    uprn = uprn.upper().lstrip('U')
 
     # Initial session to get the form
     session = requests.Session()
