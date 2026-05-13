@@ -216,7 +216,7 @@ def get_bin_data(postcode, uprn):
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: python bins.py <postcode> <uprn>")
+        print("Usage: python scrape.py <postcode> <uprn>")
         sys.exit(1)
 
     postcode = sys.argv[1]
