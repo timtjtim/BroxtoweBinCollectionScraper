@@ -167,7 +167,12 @@ def get_bin_data(postcode, uprn):
     if not response.ok:
         raise ServiceUnavailableError(f"Failed to submit form: {response.status_code}")
 
-    return parse_bin_data(response.text)
+    # Parse the bin collection data
+    bin_data = parse_bin_data(response.text)
+
+    return {
+        'bin_collections': bin_data,
+    }
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
