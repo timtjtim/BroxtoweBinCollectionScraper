@@ -3,20 +3,11 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 import sys
 
-URL = "https://selfservice.broxtowe.gov.uk/renderform.aspx?t=217&k=9D2EF214E144EE796430597FB475C3892C43C528"
-ASPX_KEYS = ["__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION"]
-
-BASE_ID = "ctl00_ContentPlaceHolder1_"
-BASE_NAME = BASE_ID.replace("_", "$")
-
-FORM_CODE = "APUP_5683"
-FORM_ID = f"{BASE_ID}{FORM_CODE}"
-FORM_NAME = f"{BASE_NAME}{FORM_CODE}"
-
-POSTCODE_NAME = f"{BASE_NAME}FF5683TB"
-SEARCH_NAME = f"{BASE_NAME}FF5683BTN"
-ADDRESS_NAME = f"{BASE_NAME}FF5683DDL"
-NEXT_BUTTON_NAME = f"{BASE_NAME}btnSubmit"
+BASE_URL = "https://selfservice.broxtowe.gov.uk"
+FORM_GUID = "2a9c4d92-ef0c-4e45-960a-35d062c9c2d1"
+OBJECT_TEMPLATE_ID = "217"
+FORM_KEY = "9D2EF214E144EE796430597FB475C3892C43C528"
+INITIAL_SECTION_ID = "748"
 
 class ScraperError(Exception):
     """Base class for scraper errors"""
@@ -38,14 +29,19 @@ class InvalidResponseError(ScraperError):
     """Raised when the response is invalid"""
     pass
 
-def get_headers(delta=True):
-    return {
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0 BroxtoweBinCollectionScraper/1.0 (+https://github.com/timtjtim/BroxtoweBinCollectionScraper;)",
-        "x-microsoftajax": f"Delta={'true' if delta else 'false'}",
-        "x-requested-with": "XMLHttpRequest",
-    }
-
 def parse_bin_data(html_content):
+    """
+    Parses the HTML content to extract bin collection data.
+
+    Args:
+        html_content (str): The HTML content to parse
+
+    Returns:
+        list: A list of dictionaries containing bin data
+
+    Raises:
+        UpstreamError: If no bin collection data is found
+    """
     soup = BeautifulSoup(html_content, 'html.parser')
     table = soup.find('table', {'class': 'bartec'})
 
@@ -78,140 +74,104 @@ def parse_bin_data(html_content):
 
     return bins
 
-def extract_aspx_fields(response_text, keys):
-    keys += ASPX_KEYS
-    response_parts = response_text.split('|')
-
-    extracted = {key: None for key in keys}
-
-    # Extract form data from response parts
-    for i, part in enumerate(response_parts):
-        for key in keys:
-            if key == part:
-                extracted[key] = response_parts[i + 1]
-
-    return extracted
-
-def format_uprn(uprn):
-    return f"U{uprn}"
-
-def extract_uprn(not_uprn):
-    return not_uprn.lstrip("U")
-
 def validate_response(response: requests.Response):
     """Validate the HTTP response and raise appropriate exceptions"""
     if response.status_code == 503:
         raise ServiceUnavailableError("Broxtowe Borough Council website is currently unavailable")
-
     if response.status_code == 404:
         raise InvalidResponseError(
-            "Broxtowe Borough Council requested page was not found"
+                "Broxtowe Borough Council requested page was not found"
         )
-
     if response.status_code >= 500:
         raise ServiceUnavailableError(
-            f"Server error: {response.status_code}, {response.text}"
+                f"Server error: {response.status_code}, {response.text}"
         )
 
     if response.status_code >= 400:
         raise InvalidResponseError(
-            f"Client error: {response.status_code}, {response.text}"
+                f"Client error: {response.status_code}, {response.text}"
         )
 
     if not response.ok:
         raise InvalidResponseError(f"Unexpected response: {response.status_code}, {response.text}")
 
-def get_bin_data(postcode, uprn):
-    postcode = postcode.upper().replace(" ", "")
-    uprn = uprn.upper().lstrip('U')
+def format_uprn(uprn):
+    return f"U{uprn}"
 
-    # Initial session to get the form
+def get_user_agent():
+    return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0 BroxtoweBinCollectionScraper/1.0 (+https://github.com/timtjtim/BroxtoweBinCollectionScraper;)"
+
+def get_bin_data(postcode, uprn):
+    """
+    Returns the bin collection data for a given postcode and UPRN.
+
+    Args:
+        postcode (str): The postcode to search for
+        uprn (str): The Unique Property Reference Number
+
+    Returns:
+        str: The HTML content of the page containing the bin data
+    """
+    postcode = postcode.lower().replace(" ", "")
+    uprn = format_uprn(uprn.upper().lstrip('U'))
+
     session = requests.Session()
 
-    # Initial GET request
-    response = session.get(URL, headers=get_headers())
+    # Step 1: GET the initial form page to obtain cookies and the verification token
+    initial_url = f"{BASE_URL}/renderform?t={OBJECT_TEMPLATE_ID}&k={FORM_KEY}"
+    response = session.get(initial_url, headers={
+        "user-agent": get_user_agent(),
+    })
+
     validate_response(response)
 
-    # Parse the response to get form data
+    # if not response.ok:
+    #     raise ServiceUnavailableError(f"Failed to load initial form page: {response.status_code}")
+
     soup = BeautifulSoup(response.text, 'html.parser')
 
-    # Extract form fields
-    aspx_fields = {key: soup.find("input", {"name": key})["value"] for key in ASPX_KEYS}
+    # Extract the __RequestVerificationToken
+    token_input = soup.find('input', {'name': '__RequestVerificationToken'})
+    if not token_input:
+        raise UpstreamError("Could not find __RequestVerificationToken in form page")
+    verification_token = token_input['value']
 
-    # Prepare data for the AJAX request
-    data = {
-        "ctl00$ScriptManager1": f"{FORM_NAME}|{SEARCH_NAME}",
-        "__EVENTTARGET": SEARCH_NAME,
-        POSTCODE_NAME: postcode,
-        "__ASYNCPOST": "true",
+    # Step 2: POST to submit the form with the address (postcode search + UPRN selection)
+    # This mirrors the AJAX request from sample-fetch.js
+    form_data = {
+        "__RequestVerificationToken": verification_token,
+        "FormGuid": FORM_GUID,
+        "ObjectTemplateID": OBJECT_TEMPLATE_ID,
+        "Trigger": "submit",
+        "CurrentSectionID": INITIAL_SECTION_ID,
+        "TriggerCtl": "",
+        "FF5683": uprn,
+        "FF5683lbltxt": "Address",
+        "FF5683-text": postcode,
     }
-    data.update(aspx_fields)
 
-    # Make the AJAX request
-    response = session.post(URL, headers=get_headers(), data=data)
-    validate_response(response)
-
-    aspx_fields = extract_aspx_fields(
-        response.text, [FORM_ID]
-    )
-    soup = BeautifulSoup(
-        aspx_fields[FORM_ID], "html.parser"
-    )
-    address_select = soup.find("select", {"name": ADDRESS_NAME})
-
-    if not address_select:
-        raise ClientError('No addresses for the postcode')
-
-    addresses = []
-    for option in address_select.find_all('option'):
-        if option.get('value') and option.get('value') != '0':  # Skip the "Enter a different post code" option
-            addresses.append({
-                'uprn': extract_uprn(option.get('value')),
-                'address': option.text
-            })
-
-    if not addresses:
-        raise ClientError("No addresses for the postcode")
-
-    try:
-        matched_address = next(address for address in addresses if address["uprn"] == uprn)
-    except StopIteration as e:
-        raise ClientError("No address for the postcode and UPRN")
-
-    # Make request with the UPRN
-    data = {
-        "ctl00$ScriptManager1": f"{FORM_NAME}|{ADDRESS_NAME}",
-        ADDRESS_NAME: format_uprn(matched_address["uprn"]),
-        "__EVENTTARGET": ADDRESS_NAME,
-        "__ASYNCPOST": "true",
+    headers = {
+        "user-agent": get_user_agent(),
+        "accept": "text/plain, */*; q=0.01",
+        "content-type": "application/x-www-form-urlencoded",
+        "x-requested-with": "XMLHttpRequest",
+        "referer": initial_url,
     }
-    data.update(aspx_fields)
-
-    response = session.post(URL, headers=get_headers(), data=data)
-    validate_response(response)
-
-    aspx_fields = extract_aspx_fields(
-        response.text, [FORM_ID]
-    )
-
-    data = {
-        "__EVENTTARGET": NEXT_BUTTON_NAME,
-    }
-    data.update(aspx_fields)
 
     response = session.post(
-        URL,
-        headers=get_headers(False),
-        data=data,
+        f"{BASE_URL}/renderform/Form",
+        headers=headers,
+        data=form_data,
     )
-    validate_response(response)
+
+    if not response.ok:
+        raise ServiceUnavailableError(f"Failed to submit form: {response.status_code}")
 
     # Parse the bin collection data
     bin_data = parse_bin_data(response.text)
 
     return {
         'bin_collections': bin_data,
-        'address': matched_address,
     }
 
 if __name__ == "__main__":

@@ -17,13 +17,8 @@ class BinData(BaseModel):
     next_collection_raw: str
     next_collection_iso: str
 
-class Address(BaseModel):
-    uprn: str
-    address: str
-
 class BinResponse(BaseModel):
     bin_collections: Optional[List[BinData]]
-    address: Address
 
 @app.get("/bins", response_model=BinResponse)
 async def get_bins(postcode: str, uprn: str):
